@@ -115,11 +115,13 @@ def build_sft_data():
 
                 # Execute the action to get the tool output
                 try:
-                    resp = env.tau_env.step(action)
+                    resp = env.step(action)
                     if resp.done:
                         break
                     messages.append({"role": "user", "content": str(resp.observation)})
                 except Exception as e:
+                    import traceback
+                    print(f"Task {task_idx}: action {action.name} failed: {e}\n{traceback.format_exc()}")
                     messages.append({"role": "user", "content": f"Error: {e}"})
                     success = False
                     break
