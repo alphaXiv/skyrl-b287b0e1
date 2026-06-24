@@ -1,14 +1,15 @@
 #!/bin/bash
 set -ex
 
-# ─── SDPO K=0 from SFT model (lr=1e-5, trust-region) ─────────────────────
-# Model: alphaXiv/sdpo-tau-retail-sft-qwen3-4b (SFT-warmed Qwen3-4B)
-# Sync K=0, lr=1e-5, trust-region teacher, G=1.
-# Should be stable since SFT teaches the model the tool-call format.
+# ─── SDPO from SFT model: K=0 stable (lr=1e-6) AND K=3 collapse (lr=1e-5) ─
+# Runs two configs sequentially from the SFT-warmed model.
+# K=0 lr=1e-6: stable baseline
+# K=3 lr=1e-5 naive IS: collapse experiment (3 seeds)
 
 export WANDB_API_KEY=${WANDB_API_KEY:-}
 export HF_TOKEN=${HF_TOKEN:-}
 SEED=${SEED:-0}
+MODE=${MODE:-k0_stable}  # k0_stable or k3_collapse
 
 uv sync --extra fsdp
 source .venv/bin/activate
@@ -16,55 +17,76 @@ python scripts/tau_retail/prepare_data.py --output-dir /root/data/tau_retail
 
 MODEL_PATH="alphaXiv/sdpo-tau-retail-sft-qwen3-4b"
 SFT_REPO="alphaXiv/sdpo-tau-retail-sft-qwen3-4b"
+DATA_DIR="/root/data/tau_retail"
 
-# Reorganize HF repo: move policy/* to root, upload tokenizer
+# Ensure HF repo has model at root + tokenizer
 python -c "
-from huggingface_hub import HfApi, hf_hub_download
-import os, shutil, tempfile
-
+from huggingface_hub import HfApi
 api = HfApi(token='$HF_TOKEN')
-
-# Check if model is at root (has model.safetensors at root)
 try:
     api.hf_hub_download(repo_id='$SFT_REPO', filename='model.safetensors')
     print('Model already at root')
 except Exception:
     print('Reorganizing: moving policy/* to root...')
-    # Download all files from policy/ subfolder
     api.snapshot_download(repo_id='$SFT_REPO', local_dir='/tmp/sft_model', allow_patterns=['policy/*'])
-    # Upload to root
+    import os
     for f in os.listdir('/tmp/sft_model/policy'):
-        api.upload_file(
-            path_or_fileobj=f'/tmp/sft_model/policy/{f}',
-            path_in_repo=f,
-            repo_id='$SFT_REPO',
-            repo_type='model',
-        )
+        api.upload_file(path_or_fileobj=f'/tmp/sft_model/policy/{f}', path_in_repo=f, repo_id='$SFT_REPO', repo_type='model')
     print('Model files moved to root')
-    # Also upload tokenizer from base Qwen3-4B
-    try:
-        api.hf_hub_download(repo_id='$SFT_REPO', filename='tokenizer_config.json')
-        print('Tokenizer already present')
-    except Exception:
-        print('Uploading tokenizer from Qwen/Qwen3-4B...')
-        from transformers import AutoTokenizer
-        tok = AutoTokenizer.from_pretrained('Qwen/Qwen3-4B')
-        tok.push_to_hub('$SFT_REPO', token='$HF_TOKEN')
-        print('Tokenizer uploaded')
+try:
+    api.hf_hub_download(repo_id='$SFT_REPO', filename='tokenizer_config.json')
+    print('Tokenizer present')
+except Exception:
+    print('Uploading tokenizer...')
+    from transformers import AutoTokenizer
+    tok = AutoTokenizer.from_pretrained('Qwen/Qwen3-4B')
+    tok.push_to_hub('$SFT_REPO', token='$HF_TOKEN')
+    print('Tokenizer uploaded')
 "
-RUN_NAME="sdpo_sync_k0_sft_lr1e5_seed${SEED}"
-DATA_DIR="/root/data/tau_retail"
+
+if [ "$MODE" = "k0_stable" ]; then
+    RUN_NAME="sdpo_sync_k0_sft_lr1e6_seed${SEED}"
+    LR=1e-6
+    STALENESS=0
+    COLOCATE=true
+    POLICY_GPUS=4
+    NUM_ENGINES=4
+    GPU_MEM=0.45
+    USE_IS=false
+    IS_CLIP=null
+    NUM_WORKERS=32
+    WEIGHT_SYNC=""
+else
+    RUN_NAME="sdpo_async_k3_sft_lr1e5_naive_is_seed${SEED}"
+    LR=1e-5
+    STALENESS=3
+    COLOCATE=false
+    POLICY_GPUS=4
+    NUM_ENGINES=4
+    GPU_MEM=0.8
+    USE_IS=true
+    IS_CLIP=null
+    NUM_WORKERS=64
+    WEIGHT_SYNC="weight_sync_backend=nccl"
+fi
+
+COLOCATE_FLAG=""
+if [ "$COLOCATE" = "true" ]; then
+    COLOCATE_FLAG="trainer.placement.colocate_all=true"
+else
+    COLOCATE_FLAG="trainer.placement.colocate_all=false trainer.placement.colocate_policy_ref=true"
+fi
 
 python -m skyrl.train.entrypoints.main_sdpo \
   data.train_data="['$DATA_DIR/tau_retail_train.parquet']" \
   data.val_data="['$DATA_DIR/tau_retail_eval.parquet']" \
   trainer.strategy=fsdp \
-  trainer.placement.colocate_all=true \
+  $COLOCATE_FLAG \
   trainer.policy.model.path=$MODEL_PATH \
   trainer.ref.model.path=$MODEL_PATH \
   trainer.critic.model.path=null \
-  trainer.placement.policy_num_gpus_per_node=4 \
-  trainer.placement.ref_num_gpus_per_node=4 \
+  trainer.placement.policy_num_gpus_per_node=$POLICY_GPUS \
+  trainer.placement.ref_num_gpus_per_node=$POLICY_GPUS \
   trainer.epochs=6 \
   trainer.max_training_steps=40 \
   trainer.train_batch_size=16 \
@@ -80,14 +102,17 @@ python -m skyrl.train.entrypoints.main_sdpo \
   trainer.algorithm.use_kl_loss=false \
   trainer.algorithm.temperature=1.0 \
   trainer.algorithm.zero_variance_filter=false \
-  trainer.algorithm.sdpo.use_is=false \
+  trainer.algorithm.sdpo.use_is=$USE_IS \
+  trainer.algorithm.sdpo.is_clip=$IS_CLIP \
   trainer.algorithm.sdpo.hint_max_length=2048 \
   trainer.algorithm.sdpo.teacher_mode=policy \
-  trainer.policy.optimizer_config.lr=1e-5 \
+  trainer.policy.optimizer_config.lr=$LR \
   trainer.policy.optimizer_config.num_warmup_steps=0 \
   trainer.policy.optimizer_config.weight_decay=0.0 \
   trainer.seed=$SEED \
-  trainer.fully_async.max_staleness_steps=0 \
+  trainer.fully_async.max_staleness_steps=$STALENESS \
+  trainer.fully_async.num_parallel_generation_workers=$NUM_WORKERS \
+  trainer.fully_async.clear_kv_cache_on_weight_sync=false \
   trainer.eval_before_train=true \
   trainer.eval_interval=5 \
   trainer.eval_batch_size=20 \
@@ -110,24 +135,24 @@ python -m skyrl.train.entrypoints.main_sdpo \
   generator.sampling_params.logprobs=1 \
   generator.chat_template_kwargs.enable_thinking=false \
   generator.inference_engine.backend=vllm \
-  generator.inference_engine.num_engines=4 \
+  generator.inference_engine.num_engines=$NUM_ENGINES \
   generator.inference_engine.tensor_parallel_size=1 \
-  generator.inference_engine.gpu_memory_utilization=0.45 \
+  generator.inference_engine.gpu_memory_utilization=$GPU_MEM \
   generator.inference_engine.enforce_eager=false \
   generator.inference_engine.run_engines_locally=true \
   generator.inference_engine.async_engine=true \
-  generator.inference_engine.weight_sync_backend=nccl \
+  ${WEIGHT_SYNC:+generator.inference_engine.$WEIGHT_SYNC} \
   generator.max_input_length=10240 \
   "$@"
 
 mkdir -p .openresearch/artifacts
 cat > .openresearch/artifacts/EVAL.md << EOF
-# SDPO K=0 from SFT Model (lr=1e-5, trust-region) — Seed $SEED
+# SDPO from SFT — $MODE — Seed $SEED
 
 ## Config
-- Model: alphaXiv/sdpo-tau-retail-sft-qwen3-4b (SFT-warmed)
-- Algorithm: SDPO, trust-region teacher, lr=1e-5
-- K=0 (sync), G=1, no IS
+- Model: alphaXiv/sdpo-tau-retail-sft-qwen3-4b (SFT-warmed Qwen3-4B)
+- Mode: $MODE (lr=$LR, staleness=$STALENESS, use_is=$USE_IS)
+- Trust-region teacher, G=1
 - Steps: 40
 - WandB: sdpo-tau-retail-glm / $RUN_NAME
 EOF
