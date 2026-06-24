@@ -11,15 +11,19 @@ export HF_TOKEN=${HF_TOKEN:-}
 # ─── Sync dependencies (litellm + tau-bench now in pyproject.toml) ────────
 uv sync --extra fsdp
 
+# Activate the venv directly so Ray workers inherit the correct Python
+# (avoids uv run wrapping which causes Ray workers to create a new venv)
+source .venv/bin/activate
+
 # ─── Prepare tau-retail dataset ──────────────────────────────────────────
-uv run --no-sync --extra fsdp python scripts/tau_retail/prepare_data.py --output-dir /root/data/tau_retail
+python scripts/tau_retail/prepare_data.py --output-dir /root/data/tau_retail
 
 # ─── Training config ─────────────────────────────────────────────────────
 MODEL_PATH="Qwen/Qwen3-4B"
 RUN_NAME="sdpo_sync_k0_seed0"
 DATA_DIR="/root/data/tau_retail"
 
-uv run --no-sync --extra fsdp -m skyrl.train.entrypoints.main_sdpo \
+python -m skyrl.train.entrypoints.main_sdpo \
   data.train_data="['$DATA_DIR/tau_retail_train.parquet']" \
   data.val_data="['$DATA_DIR/tau_retail_eval.parquet']" \
   trainer.strategy=fsdp \
