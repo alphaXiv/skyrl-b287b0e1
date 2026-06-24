@@ -105,6 +105,10 @@ def build_sft_data():
             from tau_bench.types import Action
             success = True
             for action in task.actions:
+                # Skip 'respond' actions — they trigger the user sim
+                if action.name == "respond":
+                    continue
+
                 # Format the action as JSON (what the model should generate)
                 action_json = json.dumps({"name": action.name, "arguments": action.kwargs})
                 messages.append({"role": "assistant", "content": action_json})
@@ -120,8 +124,10 @@ def build_sft_data():
                     success = False
                     break
 
-            if success:
+            if success and len(messages) > 3:  # at least system + user + 1 assistant + 1 tool output
                 rows.append({"messages": messages, "task_index": task_idx})
+            elif not success:
+                print(f"Task {task_idx}: failed during action execution")
         except Exception as e:
             print(f"Task {task_idx} failed: {e}")
             continue
