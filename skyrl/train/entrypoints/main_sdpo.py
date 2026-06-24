@@ -108,6 +108,15 @@ def sdpo_loss(
             kl_per_token = log_ratio.float()
             metrics["sdpo/kl_mean"] = (kl_per_token * loss_mask).sum().item() / mask_sum.item()
             metrics["sdpo/kl_max"] = (kl_per_token.abs() * loss_mask).max().item()
+            # Debug: log per-token stats for first sample first 10 tokens
+            import os as _os
+            if _os.environ.get("SDPO_DEBUG"):
+                from loguru import logger as _logger
+                _logger.info(f"[SDPO LOSS DEBUG] loss={loss.item():.4f} mask_sum={mask_sum.item():.0f}")
+                _logger.info(f"[SDPO LOSS DEBUG] student logp: mean={log_probs[loss_mask>0].mean().item():.3f} std={log_probs[loss_mask>0].std().item():.3f}")
+                _logger.info(f"[SDPO LOSS DEBUG] teacher logp: mean={teacher_log_probs[loss_mask>0].mean().item():.3f} std={teacher_log_probs[loss_mask>0].std().item():.3f}")
+                _logger.info(f"[SDPO LOSS DEBUG] log_ratio: mean={log_ratio[loss_mask>0].mean().item():.3f} max={log_ratio[loss_mask>0].max().item():.3f} min={log_ratio[loss_mask>0].min().item():.3f}")
+                _logger.info(f"[SDPO LOSS DEBUG] per_token_loss: mean={per_token_loss[loss_mask>0].mean().item():.3f} max={per_token_loss[loss_mask>0].max().item():.3f}")
     else:
         loss = per_token_loss.mean()
 
@@ -185,6 +194,49 @@ class SDPOTrainerMixin:
 
         training_input["teacher_sequences"] = teacher_sequences
         training_input["teacher_attention_mask"] = teacher_attention_mask
+
+        # ─── DEBUG: dump first 3 samples ───────────────────────────────
+        if self.global_step < 3:
+            import json as _json
+            os.makedirs(".openresearch/artifacts", exist_ok=True)
+            debug_path = f".openresearch/artifacts/debug_step{self.global_step}.jsonl"
+            with open(debug_path, "a") as f:
+                for i in range(min(3, len(uids))):
+                    hint_text = self._uid_to_hint.get(uids[i], "")[:500]
+                    prompt_decoded = self.tokenizer.decode(prompt_ids_list[i])[:1000]
+                    response_decoded = self.tokenizer.decode(response_ids_list[i])[:1000]
+                    teacher_prompt_decoded = self.tokenizer.decode(teacher_prompts[i])[:1500]
+                    teacher_seq_decoded = self.tokenizer.decode(teacher_sequences[i].tolist())[:1500]
+                    loss_masks_i = generator_output.get("loss_masks", [[0]])[i] if i < len(generator_output.get("loss_masks", [])) else [0]
+                    rewards_i = generator_output.get("rewards", [[0.0]])[i] if i < len(generator_output.get("rewards", [])) else [0.0]
+                    entry = {
+                        "step": self.global_step,
+                        "sample_idx": i,
+                        "uid": uids[i],
+                        "hint_text": hint_text,
+                        "prompt_decoded": prompt_decoded,
+                        "response_decoded": response_decoded,
+                        "teacher_prompt_decoded": teacher_prompt_decoded,
+                        "teacher_seq_decoded": teacher_seq_decoded,
+                        "response_len": len(response_ids_list[i]),
+                        "prompt_len": len(prompt_ids_list[i]),
+                        "loss_mask_sum": sum(loss_masks_i) if isinstance(loss_masks_i, list) else 0,
+                        "reward": rewards_i if isinstance(rewards_i, (int, float)) else (sum(rewards_i) if isinstance(rewards_i, list) else 0),
+                        "stop_reason": generator_output.get("stop_reasons", [""])[i] if i < len(generator_output.get("stop_reasons", [])) else "",
+                    }
+                    f.write(_json.dumps(entry) + "\n")
+            from loguru import logger as _logger
+            _logger.info(f"[SDPO DEBUG] Dumped {min(3, len(uids))} samples to {debug_path}")
+            # Also log the first sample to stdout for immediate visibility
+            for i in range(min(2, len(uids))):
+                _logger.info(f"[SDPO DEBUG] step={self.global_step} sample={i} uid={uids[i]}")
+                _logger.info(f"[SDPO DEBUG] HINT: {self._uid_to_hint.get(uids[i], '')[:300]}")
+                _logger.info(f"[SDPO DEBUG] PROMPT: {self.tokenizer.decode(prompt_ids_list[i])[:500]}")
+                _logger.info(f"[SDPO DEBUG] RESPONSE: {self.tokenizer.decode(response_ids_list[i])[:500]}")
+                _logger.info(f"[SDPO DEBUG] TEACHER_PROMPT: {self.tokenizer.decode(teacher_prompts[i])[:500]}")
+                _logger.info(f"[SDPO DEBUG] REWARD: {generator_output.get('rewards', [['?']])[i]}")
+                _logger.info(f"[SDPO DEBUG] STOP_REASON: {generator_output.get('stop_reasons', [''])[i]}")
+
         return training_input
 
     def fwd_logprobs_values_reward(self, training_input: TrainingInputBatch):
@@ -220,6 +272,48 @@ class SDPOTrainerMixin:
         training_input["base_action_log_probs"] = base_log_probs
         training_input["action_log_probs"] = action_log_probs
         training_input["values"] = None
+
+        # ─── DEBUG: log teacher vs student log-probs ───────────────────
+        if self.global_step < 3 and action_log_probs is not None and base_log_probs is not None:
+            from loguru import logger as _logger
+            loss_mask = training_input["loss_mask"]
+            for i in range(min(2, len(action_log_probs))):
+                # Find first 10 tokens where loss_mask=1
+                mask_i = loss_mask[i]
+                valid_idx = (mask_i > 0).nonzero(as_tuple=True)[0]
+                if len(valid_idx) == 0:
+                    _logger.info(f"[SDPO DEBUG] step={self.global_step} sample={i}: NO valid tokens in loss_mask!")
+                    continue
+                first_tokens = valid_idx[:10]
+                student_lps = action_log_probs[i, first_tokens].tolist()
+                teacher_lps = base_log_probs[i, first_tokens].tolist()
+                _logger.info(f"[SDPO DEBUG] step={self.global_step} sample={i}: first 10 token log-probs:")
+                _logger.info(f"[SDPO DEBUG]   student: {[round(x,3) for x in student_lps]}")
+                _logger.info(f"[SDPO DEBUG]   teacher: {[round(x,3) for x in teacher_lps]}")
+                _logger.info(f"[SDPO DEBUG]   diff:    {[round(s-t,3) for s,t in zip(student_lps, teacher_lps)]}")
+                # Decode those tokens
+                seq_i = training_input["sequences"][i]
+                resp_len = training_input.metadata["response_length"]
+                token_ids = seq_i[-(resp_len):][first_tokens].tolist()
+                _logger.info(f"[SDPO DEBUG]   tokens:  {self.tokenizer.decode(token_ids)}")
+                # Stats over all valid tokens
+                all_student = action_log_probs[i][mask_i > 0]
+                all_teacher = base_log_probs[i][mask_i > 0]
+                _logger.info(f"[SDPO DEBUG]   student logp: mean={all_student.mean().item():.3f} std={all_student.std().item():.3f}")
+                _logger.info(f"[SDPO DEBUG]   teacher logp: mean={all_teacher.mean().item():.3f} std={all_teacher.std().item():.3f}")
+                _logger.info(f"[SDPO DEBUG]   diff mean={((all_student - all_teacher).mean()).item():.3f} max={((all_student - all_teacher).abs().max()).item():.3f}")
+                # loss_mask stats
+                _logger.info(f"[SDPO DEBUG]   loss_mask sum: {mask_i.sum().item()}, shape: {mask_i.shape}")
+                # Also check if teacher_sequences and student sequences have same response tokens
+                teacher_seq_i = training_input["teacher_sequences"][i]
+                student_seq_i = training_input["sequences"][i]
+                resp_tokens_student = student_seq_i[-resp_len:].tolist()
+                resp_tokens_teacher = teacher_seq_i[-resp_len:].tolist()
+                match = resp_tokens_student == resp_tokens_teacher
+                _logger.info(f"[SDPO DEBUG]   response tokens match between student/teacher seq: {match}")
+                if not match:
+                    n_diff = sum(1 for a,b in zip(resp_tokens_student, resp_tokens_teacher) if a != b)
+                    _logger.info(f"[SDPO DEBUG]   {n_diff} tokens differ out of {resp_len}")
 
         return training_input
 

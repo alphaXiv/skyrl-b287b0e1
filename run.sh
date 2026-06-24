@@ -1,18 +1,15 @@
 #!/bin/bash
 set -ex
 
-# ─── SDPO sync K=0 on tau-retail (sanity check: clean & stable) ──────────
-# Model: Qwen3-4B (same as paper). WandB: sdpo-tau-retail-glm.
-# Uses sync RayPPOTrainer with colocated placement (K=0 via fully_async.max_staleness_steps=0).
+# ─── SDPO DEBUG run: 3 steps, extensive logging ──────────────────────────
+# Goal: diagnose why K=0 collapses. Logs student/teacher outputs, log-probs, etc.
 
 export WANDB_API_KEY=${WANDB_API_KEY:-}
 export HF_TOKEN=${HF_TOKEN:-}
+export SDPO_DEBUG=1
 
-# ─── Sync dependencies (litellm + tau-bench now in pyproject.toml) ────────
+# ─── Sync dependencies ──────────────────────────────────────────────────
 uv sync --extra fsdp
-
-# Activate the venv directly so Ray workers inherit the correct Python
-# (avoids uv run wrapping which causes Ray workers to create a new venv)
 source .venv/bin/activate
 
 # ─── Prepare tau-retail dataset ──────────────────────────────────────────
@@ -20,7 +17,7 @@ python scripts/tau_retail/prepare_data.py --output-dir /root/data/tau_retail
 
 # ─── Training config ─────────────────────────────────────────────────────
 MODEL_PATH="Qwen/Qwen3-4B"
-RUN_NAME="sdpo_sync_k0_seed0"
+RUN_NAME="sdpo_debug_3steps"
 DATA_DIR="/root/data/tau_retail"
 
 python -m skyrl.train.entrypoints.main_sdpo \
@@ -33,10 +30,10 @@ python -m skyrl.train.entrypoints.main_sdpo \
   trainer.critic.model.path=null \
   trainer.placement.policy_num_gpus_per_node=8 \
   trainer.placement.ref_num_gpus_per_node=8 \
-  trainer.epochs=6 \
-  trainer.max_training_steps=40 \
-  trainer.train_batch_size=16 \
-  trainer.policy_mini_batch_size=16 \
+  trainer.epochs=1 \
+  trainer.max_training_steps=3 \
+  trainer.train_batch_size=8 \
+  trainer.policy_mini_batch_size=8 \
   trainer.micro_train_batch_size_per_gpu=1 \
   trainer.micro_forward_batch_size_per_gpu=2 \
   trainer.update_epochs_per_batch=1 \
@@ -54,13 +51,13 @@ python -m skyrl.train.entrypoints.main_sdpo \
   trainer.policy.optimizer_config.num_warmup_steps=0 \
   trainer.policy.optimizer_config.weight_decay=0.0 \
   trainer.fully_async.max_staleness_steps=0 \
-  trainer.eval_before_train=true \
-  trainer.eval_interval=5 \
+  trainer.eval_before_train=false \
+  trainer.eval_interval=999 \
   trainer.eval_batch_size=20 \
   generator.eval_n_samples_per_prompt=1 \
   trainer.ckpt_interval=0 \
   trainer.hf_save_interval=0 \
-  trainer.logger=wandb \
+  trainer.logger=console \
   trainer.project_name=sdpo-tau-retail-glm \
   trainer.run_name=$RUN_NAME \
   trainer.ckpt_path="/root/ckpts/$RUN_NAME" \
@@ -70,7 +67,7 @@ python -m skyrl.train.entrypoints.main_sdpo \
   generator.n_samples_per_prompt=1 \
   generator.max_turns=10 \
   generator.batched=false \
-  generator.sampling_params.max_generate_length=256 \
+  generator.sampling_params.max_generate_length=512 \
   generator.sampling_params.temperature=1.0 \
   generator.sampling_params.top_p=1.0 \
   generator.sampling_params.logprobs=1 \
@@ -89,20 +86,8 @@ python -m skyrl.train.entrypoints.main_sdpo \
 # ─── Write EVAL.md ───────────────────────────────────────────────────────
 mkdir -p .openresearch/artifacts
 cat > .openresearch/artifacts/EVAL.md << EOF
-# SDPO Sync K=0 — Tau-Retail (Qwen3-4B)
+# SDPO Debug Run (3 steps)
 
-## Config
-- Algorithm: SDPO (reverse KL, sampled-token estimator)
-- Staleness: K=0 (sync, colocated)
-- IS correction: disabled (use_is=false)
-- Model: Qwen/Qwen3-4B
-- Steps: 40
-- Batch size: 16, G=1
-- Hint: canonical action plan (Task.actions)
-- Teacher: frozen ref model (= policy at init) on hinted input
-- WandB: sdpo-tau-retail-glm / $RUN_NAME
-
-## Results
-See WandB for eval/all/avg_score (pass rate) trajectory.
-Training should be clean and stable (no collapse at K=0).
+Debug run to inspect student/teacher outputs, log-probs, and hint construction.
+See debug_step{0,1,2}.jsonl artifacts for full details.
 EOF
