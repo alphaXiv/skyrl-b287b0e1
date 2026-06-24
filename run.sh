@@ -19,7 +19,7 @@ python scripts/tau_retail/prepare_data.py --output-dir /root/data/tau_retail
 
 # ─── Training config ─────────────────────────────────────────────────────
 MODEL_PATH="Qwen/Qwen3-4B"
-RUN_NAME="sdpo_sync_k0_trust_region_seed0"
+RUN_NAME="sdpo_sync_k0_lr1e6_trust_region_seed0"
 DATA_DIR="/root/data/tau_retail"
 
 python -m skyrl.train.entrypoints.main_sdpo \
@@ -43,14 +43,14 @@ python -m skyrl.train.entrypoints.main_sdpo \
   trainer.algorithm.max_seq_len=11264 \
   trainer.algorithm.policy_loss_type=sdpo \
   trainer.algorithm.advantage_estimator=sdpo_no_op \
-  trainer.algorithm.use_kl_in_reward=true \
+  trainer.algorithm.use_kl_in_reward=false \
   trainer.algorithm.use_kl_loss=false \
   trainer.algorithm.temperature=1.0 \
   trainer.algorithm.zero_variance_filter=false \
   trainer.algorithm.sdpo.use_is=false \
   trainer.algorithm.sdpo.hint_max_length=2048 \
   trainer.algorithm.sdpo.teacher_mode=policy \
-  trainer.policy.optimizer_config.lr=1e-5 \
+  trainer.policy.optimizer_config.lr=1e-6 \
   trainer.policy.optimizer_config.num_warmup_steps=0 \
   trainer.policy.optimizer_config.weight_decay=0.0 \
   trainer.fully_async.max_staleness_steps=0 \
