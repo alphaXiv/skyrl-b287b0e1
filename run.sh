@@ -8,8 +8,9 @@ set -ex
 export WANDB_API_KEY=${WANDB_API_KEY:-}
 export HF_TOKEN=${HF_TOKEN:-}
 
-# ─── Install tau-bench (litellm already a SkyRL dep, so --no-deps is safe) ─
+# ─── Install tau-bench + litellm (litellm not in fsdp extra) ─────────────
 uv sync --extra fsdp
+uv pip install litellm
 uv pip install --no-deps git+https://github.com/sierra-research/tau-bench.git
 
 # ─── Prepare tau-retail dataset ──────────────────────────────────────────
