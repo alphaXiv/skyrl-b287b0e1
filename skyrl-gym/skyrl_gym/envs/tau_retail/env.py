@@ -162,6 +162,8 @@ class TauRetailEnv(BaseTextEnv):
             )
         done = resp.done or self.turns >= self.max_turns
         reward = float(resp.reward) if done else 0.0
+
+        if done:
             return BaseTextEnvStepOutput(
                 observations=[], reward=reward, done=True,
                 metadata={"reward_info": resp.info.reward_info.model_dump() if resp.info.reward_info else {}},
