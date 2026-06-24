@@ -17,19 +17,40 @@ python scripts/tau_retail/prepare_data.py --output-dir /root/data/tau_retail
 MODEL_PATH="alphaXiv/sdpo-tau-retail-sft-qwen3-4b"
 SFT_REPO="alphaXiv/sdpo-tau-retail-sft-qwen3-4b"
 
-# Upload tokenizer from base Qwen3-4B to SFT repo (if not already there)
+# Reorganize HF repo: move policy/* to root, upload tokenizer
 python -c "
-from huggingface_hub import HfApi
+from huggingface_hub import HfApi, hf_hub_download
+import os, shutil, tempfile
+
 api = HfApi(token='$HF_TOKEN')
+
+# Check if model is at root (has model.safetensors at root)
 try:
-    api.hf_hub_download(repo_id='$SFT_REPO', filename='tokenizer_config.json')
-    print('Tokenizer already present')
+    api.hf_hub_download(repo_id='$SFT_REPO', filename='model.safetensors')
+    print('Model already at root')
 except Exception:
-    print('Uploading tokenizer from Qwen/Qwen3-4B...')
-    from transformers import AutoTokenizer
-    tok = AutoTokenizer.from_pretrained('Qwen/Qwen3-4B')
-    tok.push_to_hub('$SFT_REPO', token='$HF_TOKEN')
-    print('Tokenizer uploaded')
+    print('Reorganizing: moving policy/* to root...')
+    # Download all files from policy/ subfolder
+    api.snapshot_download(repo_id='$SFT_REPO', local_dir='/tmp/sft_model', allow_patterns=['policy/*'])
+    # Upload to root
+    for f in os.listdir('/tmp/sft_model/policy'):
+        api.upload_file(
+            path_or_fileobj=f'/tmp/sft_model/policy/{f}',
+            path_in_repo=f,
+            repo_id='$SFT_REPO',
+            repo_type='model',
+        )
+    print('Model files moved to root')
+    # Also upload tokenizer from base Qwen3-4B
+    try:
+        api.hf_hub_download(repo_id='$SFT_REPO', filename='tokenizer_config.json')
+        print('Tokenizer already present')
+    except Exception:
+        print('Uploading tokenizer from Qwen/Qwen3-4B...')
+        from transformers import AutoTokenizer
+        tok = AutoTokenizer.from_pretrained('Qwen/Qwen3-4B')
+        tok.push_to_hub('$SFT_REPO', token='$HF_TOKEN')
+        print('Tokenizer uploaded')
 "
 RUN_NAME="sdpo_sync_k0_sft_lr1e5_seed${SEED}"
 DATA_DIR="/root/data/tau_retail"
