@@ -81,7 +81,8 @@ python -m skyrl.train.entrypoints.main_sdpo \
   generator.inference_engine.gpu_memory_utilization=0.8 \
   generator.inference_engine.enforce_eager=false \
   generator.inference_engine.run_engines_locally=true \
-  generator.inference_engine.async_engine=false \
+  generator.inference_engine.async_engine=true \
+  generator.inference_engine.weight_sync_backend=nccl \
   generator.max_input_length=10240 \
   "$@"
 
