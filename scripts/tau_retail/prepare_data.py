@@ -14,8 +14,7 @@ import argparse
 import json
 import os
 
-import pyarrow as pa
-import pyarrow.parquet as pq
+import pandas as pd
 
 
 def serialize_hint(task) -> str:
@@ -58,13 +57,8 @@ def main():
 
     for name, rows in [("train", train_rows), ("eval", eval_rows)]:
         path = os.path.join(args.output_dir, f"tau_retail_{name}.parquet")
-        table = pa.table({
-            "prompt": [r["prompt"] for r in rows],
-            "env_class": [r["env_class"] for r in rows],
-            "hint": [r["hint"] for r in rows],
-            "task_index": [r["task_index"] for r in rows],
-        })
-        pq.write_table(table, path)
+        df = pd.DataFrame(rows)
+        df.to_parquet(path)
         print(f"Wrote {len(rows)} rows to {path}")
 
 
