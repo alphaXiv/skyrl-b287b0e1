@@ -18,12 +18,19 @@ import pandas as pd
 
 
 def serialize_hint(task) -> str:
-    lines = ["Reference solution actions:"]
-    for i, action in enumerate(task.actions, 1):
-        kwargs_str = ", ".join(f'{k}="{v}"' if isinstance(v, str) else f"{k}={v}" for k, v in action.kwargs.items())
-        lines.append(f"{i}. {action.name}({kwargs_str})")
+    """Format canonical actions as model-output JSON tool calls.
+
+    Each action becomes a JSON object the model would generate:
+      {"name": "tool_name", "arguments": {...}}
+    Separated by newlines. This matches the model's output format so the
+    teacher's log-probs on student tokens are reasonable (no format mismatch).
+    """
+    lines = []
+    for action in task.actions:
+        kwargs_str = json.dumps(action.kwargs)
+        lines.append(json.dumps({"name": action.name, "arguments": action.kwargs}))
     if task.outputs:
-        lines.append(f"\nExpected outputs: {json.dumps(task.outputs)}")
+        lines.append(json.dumps({"name": "respond", "arguments": {"content": task.outputs[0] if task.outputs else ""}}))
     return "\n".join(lines)
 
 

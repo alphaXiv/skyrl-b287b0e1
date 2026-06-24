@@ -3,17 +3,19 @@
 Implements the SDPO loss from Hübotter et al.:
   L = E_τ~π_θ [ Σ_t KL(π_θ(·|s_t) || stopgrad(π_θ(·|s_t, c))) ]
 
+The hint c = canonical actions formatted as model-output JSON tool calls
+(loaded from the dataset's 'hint' field). G=1, failures retained.
+
+The teacher = policy model (frozen ref) run on the *hinted* input where
+the hint is appended to the prompt token IDs. Teacher log-probs are computed
+via the ref model forward pass on teacher_sequences.
+
 Sampled-token reverse-KL estimator (alpha=1, reverse KL):
   per_token_loss = (student_log_prob - teacher_log_prob).detach() * student_log_prob
 
-Off-policy IS correction (naive, unclipped — causes collapse at K>0):
+Off-policy IS correction (naive, unclipped — collapses at K>0):
   ratio = exp(student_log_prob - rollout_log_prob).detach()
   per_token_loss *= ratio
-
-The teacher = the policy model (frozen ref) run on the *hinted* input
-(hint prepended to the prompt).  Teacher log-probs are computed via the ref
-model forward pass on teacher_sequences, then stashed into the rewards/advantages
-pipeline so they reach the loss function.
 
 Trainer selection:
   - ``trainer.fully_async.max_staleness_steps > 0`` → SDPOAsyncTrainer (FullyAsync)
@@ -54,7 +56,7 @@ class SDPOConfig(BaseConfig):
     """SDPO hyperparameters."""
     use_is: bool = False
     is_clip: Optional[float] = None
-    hint_max_length: int = 1024
+    hint_max_length: int = 2048
 
 
 @dataclass
@@ -76,11 +78,7 @@ def sdpo_loss(
     loss_mask: Optional[torch.Tensor] = None,
     rollout_logprobs: Optional[torch.Tensor] = None,
 ) -> Tuple[torch.Tensor, Dict[str, Any]]:
-    """SDPO loss: per-token reverse KL with optional naive IS correction.
-
-    ``advantages`` carries the teacher log-probs (stashed via
-    ``apply_reward_kl_penalty`` + the ``sdpo_no_op`` advantage estimator).
-    """
+    """SDPO loss: per-token reverse KL with optional naive IS correction."""
     teacher_log_probs = advantages
 
     log_ratio = (log_probs - teacher_log_probs).detach()
@@ -122,9 +120,14 @@ def sdpo_no_op_advantage(token_level_rewards: torch.Tensor, **kwargs):
 # ─── Trainer mixin ───────────────────────────────────────────────────────
 
 class SDPOTrainerMixin:
-    """SDPO overrides shared by sync and async trainers."""
+    """SDPO overrides shared by sync and async trainers.
+
+    Hint = canonical actions as model-output JSON, loaded from dataset 'hint' field.
+    Teacher prompt = prompt_token_ids + hint token IDs (appended to the prompt).
+    """
 
     def _sdpo_init(self):
+        self._sdpo_cfg = self.cfg.trainer.algorithm.sdpo
         self._uid_to_hint: Dict[str, str] = {}
         train_ds = getattr(self, "train_dataset", None)
         if train_ds is not None and hasattr(train_ds, "dataframe"):
@@ -144,8 +147,7 @@ class SDPOTrainerMixin:
             self._hint_cache[uid] = []
             return []
         hint_ids = self.tokenizer.encode(hint_text, add_special_tokens=False)
-        sdpo_cfg = self.cfg.trainer.algorithm.sdpo
-        max_len = sdpo_cfg.hint_max_length
+        max_len = self._sdpo_cfg.hint_max_length
         if len(hint_ids) > max_len:
             hint_ids = hint_ids[:max_len]
         self._hint_cache[uid] = hint_ids
@@ -157,10 +159,11 @@ class SDPOTrainerMixin:
         prompt_ids_list = generator_output["prompt_token_ids"]
         response_ids_list = generator_output["response_ids"]
 
+        # Build teacher prompts: hint appended to prompt token IDs
         teacher_prompts: List[List[int]] = []
         for i, uid in enumerate(uids):
             hint_ids = self._get_hint_ids(uid)
-            teacher_prompts.append(hint_ids + list(prompt_ids_list[i]))
+            teacher_prompts.append(list(prompt_ids_list[i]) + hint_ids)
 
         dummy_rewards = [[0.0] * len(r) for r in response_ids_list]
         dummy_loss_masks = [[0] * len(r) for r in response_ids_list]

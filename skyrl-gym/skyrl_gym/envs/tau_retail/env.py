@@ -150,11 +150,18 @@ class TauRetailEnv(BaseTextEnv):
                 observations=[new_obs], reward=0.0, done=done, metadata={"parse_error": True}
             )
 
-        resp = self.tau_env.step(parsed)
+        try:
+            resp = self.tau_env.step(parsed)
+        except (KeyError, Exception) as e:
+            obs = f"Error: {e}"
+            new_obs = {"role": "user", "content": obs}
+            self.chat_history.append(new_obs)
+            done = self.turns >= self.max_turns
+            return BaseTextEnvStepOutput(
+                observations=[new_obs], reward=0.0, done=done, metadata={"env_error": str(e)}
+            )
         done = resp.done or self.turns >= self.max_turns
         reward = float(resp.reward) if done else 0.0
-
-        if done:
             return BaseTextEnvStepOutput(
                 observations=[], reward=reward, done=True,
                 metadata={"reward_info": resp.info.reward_info.model_dump() if resp.info.reward_info else {}},
