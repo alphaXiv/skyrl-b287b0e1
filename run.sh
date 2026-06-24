@@ -53,7 +53,7 @@ uv run --no-sync --extra fsdp -m skyrl.train.entrypoints.main_sdpo \
   trainer.eval_before_train=true \
   trainer.eval_interval=5 \
   trainer.eval_batch_size=20 \
-  trainer.eval_n_samples_per_prompt=1 \
+  generator.eval_n_samples_per_prompt=1 \
   trainer.ckpt_interval=0 \
   trainer.hf_save_interval=0 \
   trainer.logger=wandb \
