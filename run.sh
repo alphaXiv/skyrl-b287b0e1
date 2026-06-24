@@ -65,7 +65,7 @@ python -m skyrl.train.entrypoints.main_sdpo \
   trainer.run_name=$RUN_NAME \
   trainer.ckpt_path="/root/ckpts/$RUN_NAME" \
   trainer.export_path="/root/exports/$RUN_NAME" \
-  trainer.resume_mode=disabled \
+  trainer.resume_mode=none \
   environment.env_class=tau_retail \
   generator.n_samples_per_prompt=1 \
   generator.max_turns=10 \
