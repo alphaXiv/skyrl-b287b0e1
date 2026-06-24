@@ -46,6 +46,7 @@ python -m skyrl.train.main_sft \
   fsdp_config.cpu_offload=false \
   fsdp_config.reshard_after_forward=true \
   train_on_what=all_assistant_messages \
+  force_recache=true \
   logger=wandb \
   project_name=sdpo-tau-retail-glm \
   run_name=$RUN_NAME \
