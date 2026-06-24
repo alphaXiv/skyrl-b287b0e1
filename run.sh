@@ -14,11 +14,14 @@ source .venv/bin/activate
 
 # ─── Prepare SFT dataset ─────────────────────────────────────────────────
 python scripts/tau_retail/prepare_sft_data.py --output-dir /root/data/tau_retail_sft
+# datasets.load_dataset expects a directory, not a file
+mkdir -p /root/data/tau_retail_sft_dir
+cp /root/data/tau_retail_sft/tau_retail_sft.parquet /root/data/tau_retail_sft_dir/
 
 # ─── SFT training ────────────────────────────────────────────────────────
 MODEL_PATH="Qwen/Qwen3-4B"
 RUN_NAME="sft_tau_retail_qwen3_4b"
-SFT_DATA="/root/data/tau_retail_sft/tau_retail_sft.parquet"
+SFT_DATA="/root/data/tau_retail_sft_dir"
 HF_REPO="rehaanahmad2013/sdpo-tau-retail-sft-qwen3-4b"
 
 python -m skyrl.train.main_sft \
