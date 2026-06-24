@@ -14,7 +14,7 @@ uv sync --extra fsdp
 source .venv/bin/activate
 python scripts/tau_retail/prepare_data.py --output-dir /root/data/tau_retail
 
-MODEL_PATH="alphaXiv/sdpo-tau-retail-sft-qwen3-4b"
+MODEL_PATH="alphaXiv/sdpo-tau-retail-sft-qwen3-4b/policy"
 RUN_NAME="sdpo_sync_k0_sft_lr1e5_seed${SEED}"
 DATA_DIR="/root/data/tau_retail"
 
