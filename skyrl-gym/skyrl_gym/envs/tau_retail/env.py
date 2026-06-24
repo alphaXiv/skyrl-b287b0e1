@@ -129,6 +129,8 @@ class TauRetailEnv(BaseTextEnv):
             d = json.loads(action_str)
         except Exception:
             return None
+        if not isinstance(d, dict):
+            return None
         name = d.get("name")
         kwargs = d.get("arguments", d.get("args", {}))
         if name is None:
