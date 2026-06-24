@@ -73,9 +73,9 @@ python -m skyrl.train.entrypoints.main_sdpo \
   generator.sampling_params.logprobs=1 \
   generator.chat_template_kwargs.enable_thinking=false \
   generator.inference_engine.backend=vllm \
-  generator.inference_engine.num_engines=8 \
+  generator.inference_engine.num_engines=4 \
   generator.inference_engine.tensor_parallel_size=1 \
-  generator.inference_engine.gpu_memory_utilization=0.8 \
+  generator.inference_engine.gpu_memory_utilization=0.45 \
   generator.inference_engine.enforce_eager=false \
   generator.inference_engine.run_engines_locally=true \
   generator.inference_engine.async_engine=true \
