@@ -1,14 +1,17 @@
 #!/bin/bash
 set -ex
 
-# ─── SDPO sync K=0, G=1, JSON tool-call hint, tau-retail (no-user) ───────
+# ─── SDPO K=3 naive IS collapse experiment ───────────────────────────────
 # Model: Qwen3-4B. WandB: sdpo-tau-retail-glm.
-# Hint = canonical actions as model-output JSON tool calls (from dataset).
-# G=1 with failures retained (matches paper's G=1 recipe).
-# Sync K=0 to confirm pipeline works and training is clean/stable.
+# Fully async K=3 + naive unclipped IS (use_is=true, is_clip=null).
+# Trust-region teacher, lr=1e-6, G=1.
+# Expected: improvement then collapse within 40 steps.
+#
+# Usage: SEED=0 bash run.sh
 
 export WANDB_API_KEY=${WANDB_API_KEY:-}
 export HF_TOKEN=${HF_TOKEN:-}
+SEED=${SEED:-0}
 
 # ─── Sync dependencies ──────────────────────────────────────────────────
 uv sync --extra fsdp
@@ -19,19 +22,20 @@ python scripts/tau_retail/prepare_data.py --output-dir /root/data/tau_retail
 
 # ─── Training config ─────────────────────────────────────────────────────
 MODEL_PATH="Qwen/Qwen3-4B"
-RUN_NAME="sdpo_sync_k0_lr1e6_trust_region_seed0"
+RUN_NAME="sdpo_async_k3_naive_is_seed${SEED}"
 DATA_DIR="/root/data/tau_retail"
 
 python -m skyrl.train.entrypoints.main_sdpo \
   data.train_data="['$DATA_DIR/tau_retail_train.parquet']" \
   data.val_data="['$DATA_DIR/tau_retail_eval.parquet']" \
   trainer.strategy=fsdp \
-  trainer.placement.colocate_all=true \
+  trainer.placement.colocate_all=false \
+  trainer.placement.colocate_policy_ref=true \
+  trainer.placement.policy_num_gpus_per_node=4 \
+  trainer.placement.ref_num_gpus_per_node=4 \
   trainer.policy.model.path=$MODEL_PATH \
   trainer.ref.model.path=$MODEL_PATH \
   trainer.critic.model.path=null \
-  trainer.placement.policy_num_gpus_per_node=4 \
-  trainer.placement.ref_num_gpus_per_node=4 \
   trainer.epochs=6 \
   trainer.max_training_steps=40 \
   trainer.train_batch_size=16 \
@@ -43,17 +47,21 @@ python -m skyrl.train.entrypoints.main_sdpo \
   trainer.algorithm.max_seq_len=11264 \
   trainer.algorithm.policy_loss_type=sdpo \
   trainer.algorithm.advantage_estimator=sdpo_no_op \
-  trainer.algorithm.use_kl_in_reward=false \
+  trainer.algorithm.use_kl_in_reward=true \
   trainer.algorithm.use_kl_loss=false \
   trainer.algorithm.temperature=1.0 \
   trainer.algorithm.zero_variance_filter=false \
-  trainer.algorithm.sdpo.use_is=false \
+  trainer.algorithm.sdpo.use_is=true \
+  trainer.algorithm.sdpo.is_clip=null \
   trainer.algorithm.sdpo.hint_max_length=2048 \
   trainer.algorithm.sdpo.teacher_mode=policy \
   trainer.policy.optimizer_config.lr=1e-6 \
   trainer.policy.optimizer_config.num_warmup_steps=0 \
   trainer.policy.optimizer_config.weight_decay=0.0 \
-  trainer.fully_async.max_staleness_steps=0 \
+  trainer.seed=$SEED \
+  trainer.fully_async.max_staleness_steps=3 \
+  trainer.fully_async.num_parallel_generation_workers=64 \
+  trainer.fully_async.clear_kv_cache_on_weight_sync=false \
   trainer.eval_before_train=true \
   trainer.eval_interval=5 \
   trainer.eval_batch_size=20 \
@@ -78,7 +86,7 @@ python -m skyrl.train.entrypoints.main_sdpo \
   generator.inference_engine.backend=vllm \
   generator.inference_engine.num_engines=4 \
   generator.inference_engine.tensor_parallel_size=1 \
-  generator.inference_engine.gpu_memory_utilization=0.45 \
+  generator.inference_engine.gpu_memory_utilization=0.8 \
   generator.inference_engine.enforce_eager=false \
   generator.inference_engine.run_engines_locally=true \
   generator.inference_engine.async_engine=true \
@@ -89,19 +97,18 @@ python -m skyrl.train.entrypoints.main_sdpo \
 # ─── Write EVAL.md ───────────────────────────────────────────────────────
 mkdir -p .openresearch/artifacts
 cat > .openresearch/artifacts/EVAL.md << EOF
-# SDPO Sync K=0, G=1, JSON Hint — Tau-Retail (Qwen3-4B)
+# SDPO K=3 Naive IS Collapse — Tau-Retail (Qwen3-4B) — Seed $SEED
 
 ## Config
-- Algorithm: SDPO (reverse KL, sampled-token estimator)
-- Staleness: K=0 (sync, colocated)
-- Group size: G=1 (failures retained)
-- Hint: canonical actions as model-output JSON tool calls
-- IS correction: disabled (use_is=false)
+- Algorithm: SDPO (reverse KL, trust-region teacher, lr=1e-6)
+- Staleness: K=3 (fully async)
+- IS correction: naive unclipped (use_is=true, is_clip=null)
+- G=1, failures retained
 - Model: Qwen/Qwen3-4B
 - Steps: 40, Batch size: 16
-- Teacher: frozen ref model on hint-appended input
+- Seed: $SEED
 - WandB: sdpo-tau-retail-glm / $RUN_NAME
 
-## Results
-See WandB for eval/all/avg_score trajectory.
+## Expected Result
+Brief improvement then collapse as IS ratios blow up on rare tokens.
 EOF
