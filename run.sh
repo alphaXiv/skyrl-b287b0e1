@@ -14,7 +14,23 @@ uv sync --extra fsdp
 source .venv/bin/activate
 python scripts/tau_retail/prepare_data.py --output-dir /root/data/tau_retail
 
-MODEL_PATH="alphaXiv/sdpo-tau-retail-sft-qwen3-4b/policy"
+MODEL_PATH="alphaXiv/sdpo-tau-retail-sft-qwen3-4b"
+SFT_REPO="alphaXiv/sdpo-tau-retail-sft-qwen3-4b"
+
+# Upload tokenizer from base Qwen3-4B to SFT repo (if not already there)
+python -c "
+from huggingface_hub import HfApi
+api = HfApi(token='$HF_TOKEN')
+try:
+    api.hf_hub_download(repo_id='$SFT_REPO', filename='tokenizer_config.json')
+    print('Tokenizer already present')
+except Exception:
+    print('Uploading tokenizer from Qwen/Qwen3-4B...')
+    from transformers import AutoTokenizer
+    tok = AutoTokenizer.from_pretrained('Qwen/Qwen3-4B')
+    tok.push_to_hub('$SFT_REPO', token='$HF_TOKEN')
+    print('Tokenizer uploaded')
+"
 RUN_NAME="sdpo_sync_k0_sft_lr1e5_seed${SEED}"
 DATA_DIR="/root/data/tau_retail"
 
