@@ -139,19 +139,77 @@ class SDPOTrainerMixin:
                     pass
         self._hint_cache: Dict[str, List[int]] = {}
 
-    def _get_hint_ids(self, uid: str) -> List[int]:
-        if uid in self._hint_cache:
-            return self._hint_cache[uid]
+    def _build_teacher_prompt_ids(
+        self,
+        prompt_token_ids: List[int],
+        uid: str,
+    ) -> List[int]:
+        """Build teacher prompt by re-applying chat template with hint in user message."""
         hint_text = self._uid_to_hint.get(uid, "")
         if not hint_text:
-            self._hint_cache[uid] = []
-            return []
-        hint_ids = self.tokenizer.encode(hint_text, add_special_tokens=False)
+            return list(prompt_token_ids)
+
+        # Truncate hint
         max_len = self._sdpo_cfg.hint_max_length
+        hint_ids = self.tokenizer.encode(hint_text, add_special_tokens=False)
         if len(hint_ids) > max_len:
             hint_ids = hint_ids[:max_len]
-        self._hint_cache[uid] = hint_ids
-        return hint_ids
+        hint_text_trunc = self.tokenizer.decode(hint_ids)
+
+        # Decode the prompt back to text, then reconstruct messages
+        prompt_text = self.tokenizer.decode(prompt_token_ids)
+
+        # The prompt was created by apply_chat_template([system, user], add_generation_prompt=True)
+        # We need to reconstruct the messages and modify the user message.
+        # Strategy: decode prompt, find the user message content, append hint to it,
+        # re-apply chat template.
+        # Simpler: use tokenizer.apply_chat_template on a new message list.
+        # We can't easily extract messages from token IDs, so we build the teacher
+        # prompt by replacing the generation prompt suffix with hint + generation prompt.
+
+        # The prompt ends with something like: ...<|im_end|>\n<|im_start|>assistant\n
+        # (the generation prompt). We want to insert the hint BEFORE the last user message's
+        # <|im_end|>, or more simply, append hint text right before the generation prompt.
+
+        # Actually, the cleanest approach: decode prompt, append hint as part of the
+        # conversation context, re-encode. Since we can't easily parse messages from tokens,
+        # let's use a simpler but effective approach:
+        # Teacher prompt = prompt_token_ids (without generation prompt suffix) + hint_text + generation prompt
+        # This puts the hint as additional context in the last user turn.
+
+        # Find the generation prompt suffix (e.g., "<|im_start|>assistant\n")
+        gen_prompt = ""
+        try:
+            gen_prompt = self.tokenizer.apply_chat_template(
+                [{"role": "user", "content": ""}], add_generation_prompt=True, tokenize=False,
+                **({"enable_thinking": False} if "enable_thinking" in self.tokenizer.apply_chat_template.__code__.co_varnames else {})
+            )
+        except Exception:
+            pass
+
+        # Get the suffix that comes after the last user message
+        # For Qwen, the prompt ends with: ...<|im_end|>\n<|im_start|>assistant\n
+        # The user message ends with: ...<|im_end|>
+        # We want to insert hint before the final <|im_end|> of the user message,
+        # or just before the generation prompt.
+
+        # Simpler approach: just append the hint text + a separator to the prompt,
+        # before the generation prompt. This is not perfect chat templating but the
+        # teacher model will see: [system] [user: task + hint] [generation prompt]
+        # which is close enough.
+
+        # Remove the generation prompt suffix from the token IDs
+        gen_prompt_ids = self.tokenizer.encode(gen_prompt, add_special_tokens=False)
+        prompt_without_gen = list(prompt_token_ids)
+        if len(prompt_without_gen) > len(gen_prompt_ids):
+            if prompt_without_gen[-len(gen_prompt_ids):] == gen_prompt_ids:
+                prompt_without_gen = prompt_without_gen[:-len(gen_prompt_ids)]
+
+        # Build: prompt_without_gen + hint_text + "\n" + gen_prompt
+        hint_with_sep = "\n\nHere is a correct solution for reference:\n\n" + hint_text_trunc + "\n\nNow correctly solve the original question."
+        hint_token_ids = self.tokenizer.encode(hint_with_sep, add_special_tokens=False)
+
+        return prompt_without_gen + hint_token_ids + gen_prompt_ids
 
     def convert_to_training_input(self, generator_output, uids):
         training_input = super().convert_to_training_input(generator_output, uids)
@@ -159,11 +217,14 @@ class SDPOTrainerMixin:
         prompt_ids_list = generator_output["prompt_token_ids"]
         response_ids_list = generator_output["response_ids"]
 
-        # Build teacher prompts: hint appended to prompt token IDs
+        # Build teacher prompts: re-templated with hint in user message
         teacher_prompts: List[List[int]] = []
         for i, uid in enumerate(uids):
-            hint_ids = self._get_hint_ids(uid)
-            teacher_prompts.append(list(prompt_ids_list[i]) + hint_ids)
+            teacher_prompt = self._build_teacher_prompt_ids(
+                prompt_ids_list[i],
+                uid,
+            )
+            teacher_prompts.append(teacher_prompt)
 
         dummy_rewards = [[0.0] * len(r) for r in response_ids_list]
         dummy_loss_masks = [[0] * len(r) for r in response_ids_list]
