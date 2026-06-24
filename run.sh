@@ -1,25 +1,20 @@
 #!/bin/bash
 set -ex
 
-# ─── SDPO sync K=0, G=1, JSON tool-call hint, tau-retail (no-user) ───────
+# ─── SDPO K=0 stable baseline (lr=1e-5, trust-region) ────────────────────
 # Model: Qwen3-4B. WandB: sdpo-tau-retail-glm.
-# Hint = canonical actions as model-output JSON tool calls (from dataset).
-# G=1 with failures retained (matches paper's G=1 recipe).
-# Sync K=0 to confirm pipeline works and training is clean/stable.
+# Sync K=0, no IS, lr=1e-5, trust-region teacher. Stable comparison for K=3.
 
 export WANDB_API_KEY=${WANDB_API_KEY:-}
 export HF_TOKEN=${HF_TOKEN:-}
+SEED=${SEED:-0}
 
-# ─── Sync dependencies ──────────────────────────────────────────────────
 uv sync --extra fsdp
 source .venv/bin/activate
-
-# ─── Prepare tau-retail dataset ──────────────────────────────────────────
 python scripts/tau_retail/prepare_data.py --output-dir /root/data/tau_retail
 
-# ─── Training config ─────────────────────────────────────────────────────
 MODEL_PATH="Qwen/Qwen3-4B"
-RUN_NAME="sdpo_sync_k0_lr1e6_trust_region_seed0"
+RUN_NAME="sdpo_sync_k0_lr1e5_trust_region_seed${SEED}"
 DATA_DIR="/root/data/tau_retail"
 
 python -m skyrl.train.entrypoints.main_sdpo \
@@ -43,16 +38,17 @@ python -m skyrl.train.entrypoints.main_sdpo \
   trainer.algorithm.max_seq_len=11264 \
   trainer.algorithm.policy_loss_type=sdpo \
   trainer.algorithm.advantage_estimator=sdpo_no_op \
-  trainer.algorithm.use_kl_in_reward=false \
+  trainer.algorithm.use_kl_in_reward=true \
   trainer.algorithm.use_kl_loss=false \
   trainer.algorithm.temperature=1.0 \
   trainer.algorithm.zero_variance_filter=false \
   trainer.algorithm.sdpo.use_is=false \
   trainer.algorithm.sdpo.hint_max_length=2048 \
   trainer.algorithm.sdpo.teacher_mode=policy \
-  trainer.policy.optimizer_config.lr=1e-6 \
+  trainer.policy.optimizer_config.lr=1e-5 \
   trainer.policy.optimizer_config.num_warmup_steps=0 \
   trainer.policy.optimizer_config.weight_decay=0.0 \
+  trainer.seed=$SEED \
   trainer.fully_async.max_staleness_steps=0 \
   trainer.eval_before_train=true \
   trainer.eval_interval=5 \
@@ -86,22 +82,14 @@ python -m skyrl.train.entrypoints.main_sdpo \
   generator.max_input_length=10240 \
   "$@"
 
-# ─── Write EVAL.md ───────────────────────────────────────────────────────
 mkdir -p .openresearch/artifacts
 cat > .openresearch/artifacts/EVAL.md << EOF
-# SDPO Sync K=0, G=1, JSON Hint — Tau-Retail (Qwen3-4B)
+# SDPO K=0 Stable Baseline (lr=1e-5, trust-region) — Seed $SEED
 
 ## Config
-- Algorithm: SDPO (reverse KL, sampled-token estimator)
-- Staleness: K=0 (sync, colocated)
-- Group size: G=1 (failures retained)
-- Hint: canonical actions as model-output JSON tool calls
-- IS correction: disabled (use_is=false)
-- Model: Qwen/Qwen3-4B
-- Steps: 40, Batch size: 16
-- Teacher: frozen ref model on hint-appended input
+- Algorithm: SDPO (reverse KL, trust-region teacher, lr=1e-5)
+- Staleness: K=0 (sync)
+- IS correction: disabled
+- G=1, Model: Qwen/Qwen3-4B, Steps: 40
 - WandB: sdpo-tau-retail-glm / $RUN_NAME
-
-## Results
-See WandB for eval/all/avg_score trajectory.
 EOF
