@@ -1,11 +1,9 @@
 #!/bin/bash
 set -ex
 
-# ─── SDPO sync K=0, G=1, JSON tool-call hint, tau-retail (no-user) ───────
-# Model: Qwen3-4B. WandB: sdpo-tau-retail-glm.
-# Hint = canonical actions as model-output JSON tool calls (from dataset).
-# G=1 with failures retained (matches paper's G=1 recipe).
-# Sync K=0 to confirm pipeline works and training is clean/stable.
+# ─── SFT warmup on tau-retail successful trajectories ────────────────────
+# Light SFT (1 epoch, lr=5e-6) to teach Qwen3-4B the JSON tool-call format.
+# Save to HF hub for use as RL starting point.
 
 export WANDB_API_KEY=${WANDB_API_KEY:-}
 export HF_TOKEN=${HF_TOKEN:-}
@@ -14,94 +12,74 @@ export HF_TOKEN=${HF_TOKEN:-}
 uv sync --extra fsdp
 source .venv/bin/activate
 
-# ─── Prepare tau-retail dataset ──────────────────────────────────────────
-python scripts/tau_retail/prepare_data.py --output-dir /root/data/tau_retail
+# ─── Prepare SFT dataset ─────────────────────────────────────────────────
+python scripts/tau_retail/prepare_sft_data.py --output-dir /root/data/tau_retail_sft
 
-# ─── Training config ─────────────────────────────────────────────────────
+# ─── SFT training ────────────────────────────────────────────────────────
 MODEL_PATH="Qwen/Qwen3-4B"
-RUN_NAME="sdpo_sync_k0_lr1e6_trust_region_seed0"
-DATA_DIR="/root/data/tau_retail"
+RUN_NAME="sft_tau_retail_qwen3_4b"
+SFT_DATA="/root/data/tau_retail_sft/tau_retail_sft.parquet"
+HF_REPO="rehaanahmad2013/sdpo-tau-retail-sft-qwen3-4b"
 
-python -m skyrl.train.entrypoints.main_sdpo \
-  data.train_data="['$DATA_DIR/tau_retail_train.parquet']" \
-  data.val_data="['$DATA_DIR/tau_retail_eval.parquet']" \
-  trainer.strategy=fsdp \
-  trainer.placement.colocate_all=true \
-  trainer.policy.model.path=$MODEL_PATH \
-  trainer.ref.model.path=$MODEL_PATH \
-  trainer.critic.model.path=null \
-  trainer.placement.policy_num_gpus_per_node=4 \
-  trainer.placement.ref_num_gpus_per_node=4 \
-  trainer.epochs=6 \
-  trainer.max_training_steps=40 \
-  trainer.train_batch_size=16 \
-  trainer.policy_mini_batch_size=16 \
-  trainer.micro_train_batch_size_per_gpu=1 \
-  trainer.micro_forward_batch_size_per_gpu=2 \
-  trainer.update_epochs_per_batch=1 \
-  trainer.max_prompt_length=4096 \
-  trainer.algorithm.max_seq_len=11264 \
-  trainer.algorithm.policy_loss_type=sdpo \
-  trainer.algorithm.advantage_estimator=sdpo_no_op \
-  trainer.algorithm.use_kl_in_reward=false \
-  trainer.algorithm.use_kl_loss=false \
-  trainer.algorithm.temperature=1.0 \
-  trainer.algorithm.zero_variance_filter=false \
-  trainer.algorithm.sdpo.use_is=false \
-  trainer.algorithm.sdpo.hint_max_length=2048 \
-  trainer.algorithm.sdpo.teacher_mode=policy \
-  trainer.policy.optimizer_config.lr=1e-6 \
-  trainer.policy.optimizer_config.num_warmup_steps=0 \
-  trainer.policy.optimizer_config.weight_decay=0.0 \
-  trainer.fully_async.max_staleness_steps=0 \
-  trainer.eval_before_train=true \
-  trainer.eval_interval=5 \
-  trainer.eval_batch_size=20 \
-  generator.eval_n_samples_per_prompt=1 \
-  trainer.ckpt_interval=0 \
-  trainer.hf_save_interval=0 \
-  trainer.logger=wandb \
-  trainer.project_name=sdpo-tau-retail-glm \
-  trainer.run_name=$RUN_NAME \
-  trainer.ckpt_path="/root/ckpts/$RUN_NAME" \
-  trainer.export_path="/root/exports/$RUN_NAME" \
-  trainer.resume_mode=none \
-  environment.env_class=tau_retail \
-  generator.n_samples_per_prompt=1 \
-  generator.max_turns=10 \
-  generator.batched=false \
-  generator.sampling_params.max_generate_length=512 \
-  generator.sampling_params.temperature=1.0 \
-  generator.sampling_params.top_p=1.0 \
-  generator.sampling_params.logprobs=1 \
-  generator.chat_template_kwargs.enable_thinking=false \
-  generator.inference_engine.backend=vllm \
-  generator.inference_engine.num_engines=4 \
-  generator.inference_engine.tensor_parallel_size=1 \
-  generator.inference_engine.gpu_memory_utilization=0.45 \
-  generator.inference_engine.enforce_eager=false \
-  generator.inference_engine.run_engines_locally=true \
-  generator.inference_engine.async_engine=true \
-  generator.inference_engine.weight_sync_backend=nccl \
-  generator.max_input_length=10240 \
+python -m skyrl.train.main_sft \
+  strategy=fsdp \
+  model.path=$MODEL_PATH \
+  dataset_name=$SFT_DATA \
+  dataset_split=train \
+  messages_key=messages \
+  max_length=8192 \
+  num_steps=200 \
+  batch_size=8 \
+  micro_train_batch_size_per_gpu=1 \
+  remove_microbatch_padding=true \
+  seed=42 \
+  optimizer_config.lr=5e-6 \
+  optimizer_config.weight_decay=0.0 \
+  optimizer_config.max_grad_norm=1.0 \
+  optimizer_config.num_warmup_steps=10 \
+  optimizer_config.scheduler=constant_with_warmup \
+  placement.num_nodes=1 \
+  placement.num_gpus_per_node=8 \
+  fsdp_config.cpu_offload=false \
+  fsdp_config.reshard_after_forward=true \
+  train_on_what=all_assistant_messages \
+  logger=wandb \
+  project_name=sdpo-tau-retail-glm \
+  run_name=$RUN_NAME \
+  ckpt_path="/root/ckpts/$RUN_NAME" \
+  ckpt_interval=0 \
+  hf_save_interval=200 \
+  export_path="/root/exports/$RUN_NAME" \
+  resume_from="" \
   "$@"
+
+# ─── Upload to HF Hub ────────────────────────────────────────────────────
+echo "Uploading SFT model to HF Hub: $HF_REPO"
+python -c "
+from huggingface_hub import HfApi
+import os
+api = HfApi(token=os.environ.get('HF_TOKEN'))
+api.create_repo(repo_id='$HF_REPO', repo_type='model', exist_ok=True)
+api.upload_folder(
+    folder_path='/root/exports/$RUN_NAME/global_step_200',
+    repo_id='$HF_REPO',
+    repo_type='model',
+)
+print(f'Uploaded to https://huggingface.co/$HF_REPO')
+"
 
 # ─── Write EVAL.md ───────────────────────────────────────────────────────
 mkdir -p .openresearch/artifacts
 cat > .openresearch/artifacts/EVAL.md << EOF
-# SDPO Sync K=0, G=1, JSON Hint — Tau-Retail (Qwen3-4B)
+# SFT Warmup — Tau-Retail (Qwen3-4B)
 
 ## Config
-- Algorithm: SDPO (reverse KL, sampled-token estimator)
-- Staleness: K=0 (sync, colocated)
-- Group size: G=1 (failures retained)
-- Hint: canonical actions as model-output JSON tool calls
-- IS correction: disabled (use_is=false)
 - Model: Qwen/Qwen3-4B
-- Steps: 40, Batch size: 16
-- Teacher: frozen ref model on hint-appended input
-- WandB: sdpo-tau-retail-glm / $RUN_NAME
+- Data: 115 tau-retail tasks (canonical actions + real tool outputs)
+- Steps: 200, lr=5e-6, 1 epoch equivalent
+- train_on_what: all_assistant_messages
+- HF repo: $HF_REPO
 
-## Results
-See WandB for eval/all/avg_score trajectory.
+## Result
+SFT model saved to HF hub for use as RL starting point.
 EOF
