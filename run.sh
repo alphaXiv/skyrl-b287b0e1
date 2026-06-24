@@ -69,7 +69,7 @@ python -m skyrl.train.entrypoints.main_sdpo \
   environment.env_class=tau_retail \
   generator.n_samples_per_prompt=1 \
   generator.max_turns=10 \
-  generator.batched=true \
+  generator.batched=false \
   generator.sampling_params.max_generate_length=256 \
   generator.sampling_params.temperature=1.0 \
   generator.sampling_params.top_p=1.0 \
@@ -80,6 +80,8 @@ python -m skyrl.train.entrypoints.main_sdpo \
   generator.inference_engine.tensor_parallel_size=1 \
   generator.inference_engine.gpu_memory_utilization=0.8 \
   generator.inference_engine.enforce_eager=false \
+  generator.inference_engine.run_engines_locally=true \
+  generator.inference_engine.async_engine=false \
   generator.max_input_length=10240 \
   "$@"
 
