@@ -29,6 +29,8 @@ uv run --no-sync --extra fsdp -m skyrl.train.entrypoints.main_sdpo \
   trainer.policy.model.path=$MODEL_PATH \
   trainer.ref.model.path=$MODEL_PATH \
   trainer.critic.model.path=null \
+  trainer.placement.policy_num_gpus_per_node=8 \
+  trainer.placement.ref_num_gpus_per_node=8 \
   trainer.epochs=6 \
   trainer.max_training_steps=40 \
   trainer.train_batch_size=16 \
