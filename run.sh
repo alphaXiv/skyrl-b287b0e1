@@ -22,7 +22,7 @@ cp /root/data/tau_retail_sft/tau_retail_sft.parquet /root/data/tau_retail_sft_di
 MODEL_PATH="Qwen/Qwen3-4B"
 RUN_NAME="sft_tau_retail_qwen3_4b"
 SFT_DATA="/root/data/tau_retail_sft_dir"
-HF_REPO="rehaanahmad2013/sdpo-tau-retail-sft-qwen3-4b"
+HF_REPO="sdpo-tau-retail-sft-qwen3-4b"
 
 python -m skyrl.train.main_sft \
   strategy=fsdp \
@@ -60,16 +60,23 @@ python -m skyrl.train.main_sft \
 # ─── Upload to HF Hub ────────────────────────────────────────────────────
 echo "Uploading SFT model to HF Hub: $HF_REPO"
 python -c "
-from huggingface_hub import HfApi
+from huggingface_hub import HfApi, whoami
 import os
 api = HfApi(token=os.environ.get('HF_TOKEN'))
-api.create_repo(repo_id='$HF_REPO', repo_type='model', exist_ok=True)
+user = whoami(token=os.environ.get('HF_TOKEN'))
+repo_id = f\"{user['name']}/$HF_REPO\"
+print(f'Uploading as user: {user[\"name\"]}, repo: {repo_id}')
+api.create_repo(repo_id=repo_id, repo_type='model', exist_ok=True)
 api.upload_folder(
     folder_path='/root/exports/$RUN_NAME/global_step_200',
-    repo_id='$HF_REPO',
+    repo_id=repo_id,
     repo_type='model',
 )
-print(f'Uploaded to https://huggingface.co/$HF_REPO')
+print(f'Uploaded to https://huggingface.co/{repo_id}')
+
+# Write the repo_id to a file for the RL run to pick up
+with open('/root/sft_model_path.txt', 'w') as f:
+    f.write(repo_id)
 "
 
 # ─── Write EVAL.md ───────────────────────────────────────────────────────
