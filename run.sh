@@ -22,7 +22,7 @@ python scripts/tau_retail/prepare_data.py --output-dir /root/data/tau_retail
 
 # ─── Training config ─────────────────────────────────────────────────────
 MODEL_PATH="Qwen/Qwen3-4B"
-RUN_NAME="sdpo_async_k3_naive_is_seed${SEED}"
+RUN_NAME="sdpo_async_k3_naive_is_lr1e5_seed${SEED}"
 DATA_DIR="/root/data/tau_retail"
 
 python -m skyrl.train.entrypoints.main_sdpo \
@@ -55,7 +55,7 @@ python -m skyrl.train.entrypoints.main_sdpo \
   trainer.algorithm.sdpo.is_clip=null \
   trainer.algorithm.sdpo.hint_max_length=2048 \
   trainer.algorithm.sdpo.teacher_mode=policy \
-  trainer.policy.optimizer_config.lr=1e-6 \
+  trainer.policy.optimizer_config.lr=1e-5 \
   trainer.policy.optimizer_config.num_warmup_steps=0 \
   trainer.policy.optimizer_config.weight_decay=0.0 \
   trainer.seed=$SEED \
