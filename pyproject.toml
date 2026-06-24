@@ -102,6 +102,10 @@ skyrl-train = [
     # Its metadata hard-depends on `nixl-cu13` too; that variant is overridden
     # out below (it would drag in the CUDA-13 stack and break the cu12 torch pin).
     "nixl; sys_platform == 'linux'",
+    # SDPO: tau-bench needs litellm (for its user simulator, which we monkeypatch
+    # to a trivial impl). litellm is also used by some agent integrations.
+    "litellm",
+    "tau-bench @ git+https://github.com/sierra-research/tau-bench.git",
 ]
 
 fsdp = [
