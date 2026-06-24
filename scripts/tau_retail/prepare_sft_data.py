@@ -126,6 +126,12 @@ def build_sft_data():
                     success = False
                     break
 
+            # Ensure the conversation ends with an assistant message
+            # (SFT trainer requires last message to be assistant)
+            if messages and messages[-1]["role"] != "assistant":
+                # Add a closing assistant message
+                messages.append({"role": "assistant", "content": json.dumps({"name": "transfer_to_human_agents", "arguments": {}})})
+
             if success and len(messages) > 3:  # at least system + user + 1 assistant + 1 tool output
                 rows.append({"messages": messages, "task_index": task_idx})
             elif not success:

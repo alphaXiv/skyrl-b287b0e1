@@ -32,7 +32,7 @@ python -m skyrl.train.main_sft \
   messages_key=messages \
   max_length=16384 \
   num_steps=200 \
-  batch_size=2 \
+  batch_size=8 \
   micro_train_batch_size_per_gpu=1 \
   remove_microbatch_padding=true \
   seed=42 \
