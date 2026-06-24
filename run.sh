@@ -9,8 +9,8 @@ export WANDB_API_KEY=${WANDB_API_KEY:-}
 export HF_TOKEN=${HF_TOKEN:-}
 
 # ─── Install tau-bench (litellm already a SkyRL dep, so --no-deps is safe) ─
-uv pip install --no-deps git+https://github.com/sierra-research/tau-bench.git || \
-  pip install --no-deps git+https://github.com/sierra-research/tau-bench.git
+uv sync --extra fsdp
+uv pip install --no-deps git+https://github.com/sierra-research/tau-bench.git
 
 # ─── Prepare tau-retail dataset ──────────────────────────────────────────
 uv run --no-sync --extra fsdp python scripts/tau_retail/prepare_data.py --output-dir /root/data/tau_retail
