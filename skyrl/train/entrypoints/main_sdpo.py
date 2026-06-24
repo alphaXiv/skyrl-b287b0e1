@@ -57,6 +57,8 @@ class SDPOConfig(BaseConfig):
     use_is: bool = False
     is_clip: Optional[float] = None
     hint_max_length: int = 2048
+    teacher_mode: str = "policy"
+    """How to compute teacher log-probs: 'ref' (frozen ref model) or 'policy' (same weights as policy, trust-region). Default 'policy' — teacher = policy weights on hinted input."""
 
 
 @dataclass
@@ -265,8 +267,23 @@ class SDPOTrainerMixin:
             )
         self.dispatch.empty_cache()
 
+        sdpo_cfg = self._sdpo_cfg
         base_log_probs = None
-        if self.ref_model is not None:
+
+        if sdpo_cfg.teacher_mode == "policy":
+            # Trust-region: teacher = policy weights on hinted input
+            # Run the POLICY model forward on teacher_sequences
+            teacher_data = TrainingInputBatch({
+                "sequences": training_input["teacher_sequences"],
+                "attention_mask": training_input["teacher_attention_mask"],
+            })
+            teacher_data.metadata = {"response_length": training_input.metadata["response_length"]}
+            base_log_probs = self._execute_forward_pass(
+                "policy", teacher_data, key="logprobs", mini_batch_boundaries=None
+            )
+            self.dispatch.empty_cache()
+        elif self.ref_model is not None:
+            # EMA/frozen ref: teacher = ref model on hinted input
             teacher_data = TrainingInputBatch({
                 "sequences": training_input["teacher_sequences"],
                 "attention_mask": training_input["teacher_attention_mask"],
